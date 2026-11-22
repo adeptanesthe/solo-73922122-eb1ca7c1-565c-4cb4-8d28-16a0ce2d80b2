@@ -1,0 +1,46 @@
+services:
+  segmenter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: lag-segmenter:1.0.0
+    ports:
+      - "8000:8000"
+    environment:
+      # 会话与幂等缓存保存在进程内存：单 worker 保证同一会话的所有块落到同一
+      # 进程。需要水平扩展时应改为外部存储（见 README「未完成事项」）。
+      WEB_CONCURRENCY: "1"
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --workers
+      - "1"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2).status==200 else 1)"
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  tests:
+    profiles: ["test"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: test
+    depends_on:
+      segmenter:
+        condition: service_healthy
+    environment:
+      SEGMENTER_BASE_URL: http://segmenter:8000
+    command: ["pytest", "-q"]
