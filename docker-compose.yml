@@ -44,3 +44,19 @@ services:
     environment:
       SEGMENTER_BASE_URL: http://segmenter:8000
     command: ["pytest", "-q"]
+
+  # 一次性演示容器：等服务 healthy 后对真实 HTTP 服务跑完整示例
+  # （逐路、批量、错误隔离、封存、逐路/批量计算量对比）。
+  demo:
+    profiles: ["demo"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    depends_on:
+      segmenter:
+        condition: service_healthy
+    environment:
+      BASE_URL: http://segmenter:8000
+    command: ["python", "examples/demo.py", "http://segmenter:8000"]
+    restart: "no"

@@ -110,3 +110,70 @@ def test_live_end_to_end():
         ("zh", 0, 4),
         ("en", 5, 7),
     ]
+
+
+def test_live_batch_endpoint():
+    """真实 HTTP 下的批量入口：同批正常 / 冲突 / 未知会话，逐项回执或错误。"""
+    session_ids = []
+    for _ in range(3):
+        status, session = _post(
+            "/sessions", {"languages": ["zh", "en"], "switch_frames": 3}
+        )
+        assert status == 201
+        session_ids.append(session["session_id"])
+
+    ok_chunk = [_frame(0) for _ in range(4)] + [_frame(1) for _ in range(4)]
+    # session 0 先提交一块，供批量里制造内容冲突。
+    status, _ = _post(
+        f"/sessions/{session_ids[0]}/chunks",
+        {"start_seq": 0, "posteriors": [_frame(0) for _ in range(4)]},
+    )
+    assert status == 200
+
+    status, batch = _post(
+        "/chunks/batch",
+        {
+            "items": [
+                {"session_id": session_ids[0], "start_seq": 0, "posteriors": ok_chunk},
+                {"session_id": session_ids[1], "start_seq": 0, "posteriors": ok_chunk},
+                {"session_id": "missing", "start_seq": 0, "posteriors": ok_chunk},
+                {"session_id": session_ids[2], "start_seq": 0, "posteriors": ok_chunk},
+            ]
+        },
+    )
+    assert status == 200, batch
+    assert batch["accepted_count"] == 2
+    assert batch["error_count"] == 2
+    results = {r["index"]: r for r in batch["results"]}
+    assert results[0]["error"]["code"] == "chunk_conflict"
+    assert results[2]["error"]["code"] == "session_not_found"
+    assert results[1]["receipt"]["next_seq"] == 8
+    assert results[3]["receipt"]["next_seq"] == 8
+
+    # 冲突 / 未知项都没有推进对应会话。
+    status, st0 = _get(f"/sessions/{session_ids[0]}")
+    assert status == 200 and st0["next_seq"] == 4
+
+    # 批量 + final 封存。
+    status, sealed = _post(
+        "/chunks/batch",
+        {
+            "items": [
+                {
+                    "session_id": session_ids[1],
+                    "start_seq": 8,
+                    "posteriors": [_frame(0) for _ in range(3)],
+                    "final": True,
+                }
+            ]
+        },
+    )
+    assert status == 200, sealed
+    receipt = sealed["results"][0]["receipt"]
+    assert receipt["sealed"] is True
+    assert receipt["open_segment"] is None
+    assert [(s["language"], s["start_frame"], s["end_frame"]) for s in receipt["segments"]] == [
+        ("zh", 0, 3),
+        ("en", 4, 7),
+        ("zh", 8, 10),
+    ]

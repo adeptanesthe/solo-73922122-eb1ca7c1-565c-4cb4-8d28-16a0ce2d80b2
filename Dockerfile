@@ -13,6 +13,7 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+COPY examples ./examples
 
 
 # ---- 测试镜像：docker compose --profile test run --rm tests --------------
